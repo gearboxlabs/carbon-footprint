@@ -8,15 +8,18 @@
 
 #include <ArduinoJson.h>
 #include <ESP8266WiFi.h>
+#include <ACROBOTIC_SSD1306.h>
+#include <stdlib.h>
 
 // Configuration
-const PROGMEM char geoip_server[] = "freegeoip.net";    //  (using DNS)
-const PROGMEM char ssid[] = "ssid";       //  your network SSID (name)
-const PROGMEM char pass[] = "password";   // your network password
-const PROGMEM char owm_url[] = "http://api.openweathermap.org/data/2.5/weather?APPID="; 
-const PROGMEM char owm_api_key[] = "";    // API KEY for OpenWeatherMap
-const pinRed = 0;
-const pinBlue = 2;
+const char *geoip_server = "freegeoip.net";    //  (using DNS)
+const char *ssid = "";       //  your network SSID (name)
+const char *pass = "";   // your network password
+const char *owm_server = "api.openweathermap.org";
+const char *owm_uri = "/data/2.5/weather?APPID="; 
+const char *owm_api_key = "";    // API KEY for OpenWeatherMap
+const uint8_t pinRed = 0;
+const uint8_t pinBlue = 2;
 
 
 
@@ -67,6 +70,7 @@ WiFiClient client;
 
 /* blinkSetup - do pinmode stuff */
 void blinkSetup() {
+  return;
   pinMode( pinRed, OUTPUT );
   pinMode( pinBlue, OUTPUT );
 }
@@ -74,6 +78,9 @@ void blinkSetup() {
 /* just blinks a pin, spending dutyCycle amount on (0..100 %) */
 void blinkPin(int pin, int ms, int dutyCycle) {
   int ds, dst_on, dst_off;
+
+  return;
+  
   if( dutyCycle < 0 ) { ds = 0; }
   if( dutyCycle > 100 ) { ds = 100; }
 
@@ -87,37 +94,75 @@ void blinkPin(int pin, int ms, int dutyCycle) {
 }
 
 void blinkRed(int ms) {
-  blinkPin( pinRed, ms, 50 );
+  //blinkPin( pinRed, ms, 50 );
 }
 
 void blinkBlue(int ms) {
-  blinkPin( pinBlue, ms, 50 );
+  //blinkPin( pinBlue, ms, 50 );
+}
+
+unsigned char state = 0;
+char states[] = { '-','_','/','|','|','\\' };
+unsigned char state_count = 6;
+
+char *spinner_str() {
+  char buf[2] =  " ";
+
+  buf[0] = states[state];
+  state++;
+  if( state >= state_count ) { 
+    state = 0;
+  }
+
+  return strdup(buf);
+}
+
+char *ftoa(char *a, double f, int precision) {
+ long p[] = {0,10,100,1000,10000,100000,1000000,10000000,100000000};
+ 
+ char *ret = a;
+ long heiltal = (long)f;
+ itoa(heiltal, a, 10);
+ while (*a != '\0') a++;
+ *a++ = '.';
+ long desimal = abs((long)((f - heiltal) * p[precision]));
+ itoa(desimal, a, 10);
+ return ret;
+}
+
+void StatusMessage( const char *msg, int y ) {
+  oled.setTextXY(y,0);
+  oled.putString(msg);
+
+  Serial.print( msg );
 }
 
 void ConnectToWifi() {
-    // We start by connecting to a WiFi network
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
+  // We start by connecting to a WiFi network
+  StatusMessage( strcat("ssid: ",ssid), 1 );  
   
+  delay(500);
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, pass);
   while (WiFi.status() != WL_CONNECTED) {
-    Serial.print(".");
-    blinkRed(500); // delay 500ms
+    StatusMessage(spinner_str(),2);
+    delay(100);
+    yield();
   }
 
-  Serial.println("");
-  Serial.println("WiFi connected");
-  
-  Serial.println("IP address: ");
-  ip=WiFi.localIP();
-  Serial.println(ip);    
-  
+  //StatusMessage("Connected",2);
+
+  ip=WiFi.localIP();  
 }
 
 void GetLocation() {
-  Serial.println("\nStarting connection to server...");
+  char buf[32];
+  char fbuf[16];
+  char fbuf2[16];
+  StatusMessage("fetch GEOLOK",2);
   // if you get a connection, report back via serial:
-  if (client.connect(server, 80)) {
+  if (client.connect(geoip_server, 80)) {
     Serial.println("connected to server");
     // Make a HTTP request:
     client.println("GET /json/ HTTP/1.1\r\nHost: freegeoip.net\r\n\r\n");
@@ -137,6 +182,12 @@ void GetLocation() {
   Serial.print(F("  Latitude: "));
   Serial.println(latitude);
 
+  ftoa(fbuf,latitude,3);
+  ftoa(fbuf2,longitude,3);
+  sprintf(buf,"loc: %s,%s",city,region);
+  StatusMessage(buf,3);
+  
+
 }
 
 boolean jsonParseLocation(int depth, byte endChar) {
@@ -148,10 +199,10 @@ boolean jsonParseLocation(int depth, byte endChar) {
     if(c == endChar) return true;    // EOD
 
     if(c == '{') { // Object follows
-      if(!jsonParse(depth + 1, '}')) return false;
+      if(!jsonParseLocation(depth + 1, '}')) return false;
       if(!depth)                     return true; // End of file
     } else if(c == '[') { // Array follows
-      if(!jsonParse(depth + 1,']')) return false;
+      if(!jsonParseLocation(depth + 1,']')) return false;
     } else if((c == '"') || (c == '\'')) { // String follows
       if(readName) { // Name-reading mode
         if(!readString(name, sizeof(name)-1, c)) return false;
@@ -252,15 +303,43 @@ int unidecode(byte len) {
   return '?';
 }
 
+void FetchWeatherData() {
+  char uribuf[128];
+  memset(uribuf, 0, 128 );
+  sprintf(
+    uribuf, "%s%s&q=%s,%s HTTP/1.0\r\nHost: %s\r\n\r\n",
+    owm_uri, owm_api_key, city, region, owm_server
+    );
+  StatusMessage(strcat("debug: ",uribuf),5);
+  
+    if (client.connect(owm_server, 80)) {
+      client.println( uribuf );
+      
+    }
+
+}
+
 // ******************************************************************** //
 
+const char *welcomemsg = "-= Carbon Footprint v0.alpha =-\n";
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("Start");
+  
+  Serial.print(welcomemsg);
+  
+  delay(1500);
+  Wire.begin();
+  oled.init();
+  oled.clearDisplay();
+  oled.setTextXY(0,0);
+  oled.putString("Carbon Footprint");
+
   blinkSetup();
   ConnectToWifi();
   GetLocation();
+
+  FetchWeatherData();
   
 }
 
